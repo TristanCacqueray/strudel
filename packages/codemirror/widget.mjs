@@ -104,6 +104,11 @@ function getCanvasWidget(id, options = {}) {
   return canvas;
 }
 
+registerWidget('_shader', (id, options = {}, pat) => {
+  const ctx = getCanvasWidget(id, options).getContext('2d');
+  return pat.tag(id).shader({ ...options, ctx, id });
+});
+
 registerWidget('_pianoroll', (id, options = {}, pat) => {
   const ctx = getCanvasWidget(id, options).getContext('2d');
   return pat.tag(id).pianoroll({ fold: 1, ...options, ctx, id });
