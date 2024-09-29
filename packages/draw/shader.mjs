@@ -30,25 +30,10 @@ uniform float iTime;
 
 // The modulation values
 uniform float icolor;
-#define moveFWD (iTime / 10.)
-uniform float track1[5];
-uniform float track2[5];
+uniform float moveFWD;
 
-// TODO: inline these tweaks and remove the define indirection
-#define t1f 1.0
-#define t1p1 (t1f * track1[0])
-#define t1p2 (t1f * track1[1])
-#define t1p3 (-2. + track1[2])
-#define t1p4 (t1f*track1[3])
-#define t1p5 (t1f*track1[4])
-
-#define t2f 1.0
-#define t2p1 (t2f*track2[0])
-#define t2p2 (t2f*track2[1])
-#define t2p3 (-2. + t2f*track2[2])
-#define t2p4 (t2f*track2[3])
-#define t2p5 (t2f*track2[4])
-
+uniform float rotations[4];
+uniform float modulations[6];
 
 // Forked from https://www.shadertoy.com/view/7lKSWW
 // Created by mrange in 2021-12-28
@@ -262,8 +247,8 @@ vec4 plane(vec3 ro, vec3 rd, vec3 pp, vec3 off, float aa, float n) {
   float prot1, prot2;
   float pmod1, pmod2;
   float cmod;
-  if (mod(n, 2.) == 0.) { prot1 = t1p1, prot2 = -t1p2, pmod1 = t2p3, pmod2 = t2p4, cmod = t1p5; }
-  else { prot1 = -t2p1, prot2 = t2p2, pmod1 = t1p3, pmod2 = t1p4, cmod = t2p5; }
+  if (mod(n, 2.) == 0.) { prot1 = rotations[0], prot2 = -rotations[1], pmod1 = modulations[0], pmod2 = modulations[1], cmod = modulations[2]; }
+  else { prot1 = -rotations[2], prot2 = rotations[3], pmod1 = modulations[3], pmod2 = modulations[4], cmod = modulations[5]; }
 
   float prot, pmod;
   if (len > .3) { prot = prot2; pmod = pmod2;
@@ -400,6 +385,26 @@ void main() {
 }
 `;
 
+const hardModulation = () => {
+  let val = 0;
+  return {
+    get: () => val,
+    set: (v) => { val = v },
+  }
+}
+
+const decayModulation = (decay) => {
+  let val = 0;
+  let desired = 0
+  return {
+    get: (ts) => {
+      val += (desired - val) / decay
+      return val
+    },
+    set: (v) => { desired = val + v },
+  }
+}
+
 // Setup the shader instance, ideally that should be done like a pattern,
 // perhaps supporting multiple instances?
 //
@@ -417,21 +422,25 @@ void main() {
 // - array: use the indiviual note value
 setTimeout(() => {
   const ctx = getDrawContext("video", {contextType: "webgl2"});
+  ctx.canvas.style.top = "-60px"
+  ctx.canvas.style.left = "235px"
 
   const app = PicoGL.createApp(ctx);
-  const sceneUB = app.createUniformBuffer([
-    // The canvas dimensions
-    PicoGL.FLOAT_VEC2,
-    // The current time
-    PicoGL.FLOAT,
-  ]);
-  sceneUB.set(0, new Float32Array([ctx.canvas.width, ctx.canvas.height]));
 
   const resolution = new Float32Array([ctx.canvas.width, ctx.canvas.height])
 
   // track values
-  const track1 = new Float32Array(5);
-  const track2 = new Float32Array(5);
+  const uniforms = {
+    moveFWD: decayModulation(100),
+    icolor: decayModulation(100),
+  }
+  const arrays = {
+    rotations: new Array(4).fill().map(() => decayModulation(50)),
+    modulations: new Array(6).fill().map(() => decayModulation(50))
+  }
+  uniforms.moveFWD.set(1)
+  const rotationsBuf = new Float32Array(4);
+  const modulationsBuf = new Float32Array(6);
 
   // Two triangle to cover the whole canvas
   const afBuffer = app.createVertexBuffer(PicoGL.FLOAT, 2, new Float32Array([
@@ -447,97 +456,88 @@ setTimeout(() => {
     .then(([afProgram]) => {
       const drawAF = app
             .createDrawCall(afProgram, afArrays)
-            .uniformBlock("Scene", sceneUB)
       ;
 
+      let prev = performance.now() / 1000;
+      let idle = 0;
+      let running = false
       const draw = () => {
         const now = performance.now() / 1000;
+        const elapsed = now - prev
+        prev = now
         app.clear();
+        const curRotations = rotationsBuf.map((_, i) => arrays.rotations[i].get(elapsed))
+        const curModulations = modulationsBuf.map((_, i) => arrays.modulations[i].get(elapsed))
+        // console.log(curRotations)
         drawAF
           // todo: only update resolution on resize
           .uniform("iResolution", resolution)
           .uniform("iTime", now)
-          .uniform("track1[0]", track1)
-          .uniform("track2[0]", track2)
+          .uniform("moveFWD", uniforms.moveFWD.get(elapsed))
+          .uniform("icolor", uniforms.icolor.get(elapsed))
+          .uniform("rotations[0]", curRotations)
+          .uniform("modulations[0]", curModulations)
           .draw();
-        requestAnimationFrame(draw);
+        if (idle++ < 100)
+          requestAnimationFrame(draw);
+        else
+          running = false
       }
-      requestAnimationFrame(draw);
 
-      globalThis.shaderSetArray = (options, idx, val) => {
-        const {name, mod} = options;
-        let track
-        if (name == "track1") {
-          track = track1
-        } else if (name == "track2") {
-          track = track2
-        } else {
-          console.error("Unknown array", name)
+
+      const startDraw = () => {
+        idle = 0
+        if (!running)
+          running = requestAnimationFrame(draw);
+      }
+
+      globalThis.shaderSetUniform = (name, val) => {
+        const dest = uniforms[name]
+        if (dest === undefined) {
+          console.error("Unknown uniform destination", name)
+          return
         }
-        const pos = idx % track.length
-        // console.log("Setting", name, idx, pos, val, track)
-        const value = mod == "incr" ? track[pos] + val : val
-        track[pos] = value
+        dest.set(val)
+        startDraw()
+      }
+
+      globalThis.shaderSetPitch = (name, idx, val) => {
+        const dest = arrays[name]
+        if (dest === undefined) {
+          console.error("Unknown pitch destination", name)
+          return
+        }
+        const pos = idx % dest.length
+        // console.log("Setting", name, idx, pos, val)
+        dest[pos].set(val)
+        startDraw()
       }
     });
 }, 100)
 
-const scale = (normalized, min, max) => normalized * (max - min) + min;
-const getValue = (e) => {
-  let { value } = e;
-  if (typeof e.value !== 'object') {
-    value = { value };
-  }
-  let { note, n, freq, s } = value;
-  if (freq) {
-    return freqToMidi(freq);
-  }
-  note = note ?? n;
-  if (typeof note === 'string') {
-    try {
-      // TODO: n(run(32)).scale("D:minor") fails when trying to query negative time..
-      return noteToMidi(note);
-    } catch (err) {
-      // console.warn(`error converting note to midi: ${err}`); // this spams to crazy
-      return 0;
-    }
-  }
-  if (typeof note === 'number') {
-    return note;
-  }
-  if (s) {
-    return '_' + s;
-  }
-  return value;
-};
-
 Pattern.prototype.shader = function (options = {}) {
+  // TODO: figure out what to display in the pattern canvas
   options.ctx.canvas.style.display = "none"
-  // The set of notes that are playing
-  let playing = new Set();
-  let pitchCount = 0;
-  this.draw(
-    (haps, time) => {
-      // The set of notes currently playing
-      const isOn = new Set()
-      haps.forEach(event => {
-        const isActive = event.whole.begin <= time && event.endClipped > time;
-        if (isActive)
-          isOn.add(getValue(event))
-      })
-      isOn.symmetricDifference(playing).forEach(note => {
-        const value = isOn.has(note) ? 1.0 : 0.0;
-        if (typeof note == "string") {
-          note = pitchCount++;
-        }
-        shaderSetArray(options, note, value)
-      })
-      playing = isOn;
-    },
-    { id: options.id }
-  )
-  return this
-  /* .onTrigger((time_deprecate, hap, currentTime, cps, targetTime) => {
-    console.log("GOOO", cps, hap)
-  }) */
+  // Keep track of the pitches value: Map String Int
+  const pitches = {};
+  let count = 0;
+  return this.onTrigger((time_deprecate, hap, currentTime, cps, targetTime) => {
+    const value = options.gain || 1.0;
+    if (options.pitch !== undefined) {
+      console.log(hap)
+      const note = hap.value.note || hap.value.s;
+      if (pitches[note] === undefined) {
+        // Assign new value, the first note gets 0, then 1, then 2, ...
+        pitches[note] = Object.keys(pitches).length
+      }
+      console.log("Here pitch", pitches)
+      shaderSetPitch(options.pitch, pitches[note], value)
+    } else if (options.seq !== undefined) {
+      shaderSetPitch(options.seq, count++, value)
+    } else if (options.uniform !== undefined) {
+      shaderSetUniform(options.uniform, value)
+    } else {
+      console.error("Unknown shader options, need either pitch or uniform", options)
+    }
+  }, false)
 };
