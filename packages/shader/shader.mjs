@@ -62,7 +62,7 @@ $: note("<C D G A Bb D C A G D Bb A>*[2,2.02]")
   }, false)
 */
 
-import { logger } from '@strudel/core';
+// import { logger } from '@strudel/core';
 
 // The standard fullscreen vertex shader.
 const vertexShader = `#version 300 es
@@ -338,10 +338,10 @@ export function loadShader(code = '', name = 'default') {
   }
   if (!_instances[name]) {
     _instances[name] = initializeShaderInstance(name, code);
-    logger('[shader] ready');
+    // logger('[shader] ready');
   } else if (_instances[name].code != code) {
     reloadShaderInstanceCode(_instances[name], code);
-    logger('[shader] reloaded');
+    // logger('[shader] reloaded');
   }
   return _instances[name];
 }
